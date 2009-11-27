@@ -3,6 +3,7 @@
 ;; Copyright (C) 2007  David M. Cooke
 
 ;; Author: David M. Cooke <david.m.cooke@gmail.com>
+;; Version: 1
 ;; Keywords: omake
 
 ;; This file is free software; you can redistribute it and/or modify
