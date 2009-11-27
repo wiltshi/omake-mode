@@ -73,10 +73,10 @@ many columns.  With no active region, dedent only the current line.
 You cannot dedent the region if any line is already at column zero."
   (interactive
    (let ((p (point))
-	 (m (mark))
-	 (arg current-prefix-arg))
+         (m (mark))
+         (arg current-prefix-arg))
      (if m
-	 (list (min p m) (max p m) arg)
+         (list (min p m) (max p m) arg)
        (list p (save-excursion (forward-line 1) (point)) arg))))
   ;; if any line is at column zero, don't shift the region
   (save-excursion
@@ -84,8 +84,8 @@ You cannot dedent the region if any line is already at column zero."
     (while (< (point) end)
       (back-to-indentation)
       (if (and (zerop (current-column))
-	       (not (looking-at "\\s *$")))
-	  (error "Region is at left edge"))
+               (not (looking-at "\\s *$")))
+          (error "Region is at left edge"))
       (forward-line 1)))
   (omake-shift-region start end (- (prefix-numeric-value
                                     (or count omake-indent-offset))))
@@ -102,10 +102,10 @@ If a prefix argument is given, the region is instead shifted by that
 many columns.  With no active region, indent only the current line."
   (interactive
    (let ((p (point))
-	 (m (mark))
-	 (arg current-prefix-arg))
+         (m (mark))
+         (arg current-prefix-arg))
      (if m
-	 (list (min p m) (max p m) arg)
+         (list (min p m) (max p m) arg)
        (list p (save-excursion (forward-line 1) (point)) arg))))
   (omake-shift-region start end (prefix-numeric-value
                                  (or count omake-indent-offset)))
