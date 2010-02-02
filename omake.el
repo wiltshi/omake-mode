@@ -403,7 +403,7 @@ function definintion")
     (message "indent-line-function = %s" indent-line-function)
 )
 
-(define-key omake-map "\C-j" 'newline-and-indent)
+(define-key omake-mode-map "\C-j" 'newline-and-indent)
 ;; indentation level modifiers. Same keys python-mode uses
 (define-key omake-mode-map "\C-c\C-l"  'omake-shift-region-left)
 (define-key omake-mode-map "\C-c\C-r"  'omake-shift-region-right)
