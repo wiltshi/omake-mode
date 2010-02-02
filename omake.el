@@ -182,6 +182,11 @@ many columns.  With no active region, indent only the current line."
   "Regular expression that (loosely) matches the beginning of a multiline
 function definintion")
 
+(defconst omake--re-arrow-arg
+  "=>"
+  "Regular expression that (very loosely) matches a line that starts an
+anonymous function argument.")
+
 (defconst omake--re-rule
   (rx (seq line-start
            (* space)
@@ -265,6 +270,15 @@ function definintion")
                       :params 1)
 (omake--def-point-bol omake-point-rule omake--re-rule
                       :target 1)
+
+(defun omake-point-arrow-arg ()
+  (save-excursion
+    (let ((here (point)))
+      (beginning-of-line)
+      (if (and (re-search-forward omake--re-arrow-arg (line-end-position) t)
+               (>= (match-end 0) here))
+          (omake--alist-from-match :arrow 1)
+        nil))))
 
 (defun omake-point-comment ()
   (save-excursion
@@ -356,6 +370,7 @@ function definintion")
         (goto-char (omake--match-end r :range))
         (looking-at (rx (* space) line-end)))
        ((omake-point-rule) t)
+       ((omake-point-arrow-arg) t)
        (t nil))
   )))
 
@@ -403,7 +418,7 @@ function definintion")
     (message "indent-line-function = %s" indent-line-function)
 )
 
-(define-key omake-mode-map "\C-j" 'newline-and-indent)
+(define-key omake-mode-map "\C-j"      'newline-and-indent)
 ;; indentation level modifiers. Same keys python-mode uses
 (define-key omake-mode-map "\C-c\C-l"  'omake-shift-region-left)
 (define-key omake-mode-map "\C-c\C-r"  'omake-shift-region-right)
