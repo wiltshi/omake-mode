@@ -115,7 +115,7 @@ many columns.  With no active region, indent only the current line."
              '("\\(OMake\\(?:file\\|root\\)\\)\\|\\(\\.om\\)$"
                . omake-mode))
 
-(defconst omake--re-identifier "[-@~_A-Za-z0-9]+")
+(defconst omake--re-identifier "[_@A-Za-z0-9][-_@~A-Za-z0-9]*")
 
 (defconst omake--re-command
   (rx (seq line-start
@@ -151,7 +151,7 @@ many columns.  With no active region, indent only the current line."
          (* space)
          (group
           (regexp ,omake--re-identifier)
-          (group (\? "." (regexp ,omake--re-identifier)))) ; for object members
+          (group (* "." (regexp ,omake--re-identifier)))) ; for object members
          (group (\? "[]"))
          (* space)
          (group (\? "+"))
@@ -396,7 +396,10 @@ anonymous function argument.")
     (modify-syntax-entry ?\" "." st)
     (modify-syntax-entry ?#  "<" st)
     (modify-syntax-entry ?\n ">" st)
-    (modify-syntax-entry ?_  "w" st)
+    (modify-syntax-entry ?_  "_" st)
+    (modify-syntax-entry ?@  "_" st)
+    (modify-syntax-entry ?-  "_" st)
+    (modify-syntax-entry ?~  "_" st)
     st))
 
 (defun omake--set-local (v arg)
