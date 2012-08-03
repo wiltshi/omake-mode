@@ -1,10 +1,11 @@
-;;; omake.el --- Editing mode for omake files
+;; -*- lexical-binding: t; -*-
+;;; omake.el --- Editing mode for OMake build files
 
-;; Copyright (C) 2007  David M. Cooke
+;; Copyright (C) 2007-2011  David M. Cooke
 
 ;; Author: David M. Cooke <david.m.cooke@gmail.com>
-;; Version: 1
-;; Keywords: omake
+;; Version: 1.1
+;; Keywords: omake ocaml
 
 ;; This file is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -21,8 +22,6 @@
 ;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
 ;; Boston, MA 02110-1301, USA.
 
-;;; Commentary:
-
 ;; Uses some code from python-mode.el, which has the following licence:
 ;; Copyright (C) 1992,1993,1994  Tim Peters
 ;; This software is provided as-is, without express or implied
@@ -31,14 +30,32 @@
 ;; organization, is hereby granted, provided that the above copyright
 ;; notice and this paragraph appear in all copies.
 
+;;; Commentary:
+;;
+;; Provides an editing mode for OMake build files. See
+;; <http://omake.metaprl.org/> for more information on OMake.
+
 ;;; Code:
 
 (require 'rx)
 
-(defvar omake-hook nil)
+(defgroup omake nil
+  "OMake editing commands for Emacs."
+  :link '(custom-group-link :tag "Font Lock Faces group" font-lock-faces)
+  :group 'tools
+  :prefix "omake-")
 
-(defvar omake-indent-offset 4
-  "Amount of indent that TAB adds.")
+(defcustom omake-indent-offset 4
+  "Amount of indent that TAB adds."
+  :type 'integer
+  :safe #'integerp
+  :group 'omake)
+
+(defface omake-targets
+  '((t (:inherit font-lock-function-name-face)))
+  "Face to use for highlighting rule targets in Font-Lock mode."
+  :group 'omake)
+
 
 ;; Taken from python-mode.el
 (defun omake-shift-region (start end count)
@@ -111,68 +128,162 @@ many columns.  With no active region, indent only the current line."
                                  (or count omake-indent-offset)))
   (omake-keep-region-active))
 
-(add-to-list 'auto-mode-alist
-             '("\\(OMake\\(?:file\\|root\\)\\)\\|\\(\\.om\\)$"
-               . omake-mode))
 
+
+(defun omake-subst (test replace tree)
+  "For elements matching TEST, apply REPLACE and substitute in TREE.
+For each element EL (car or cdr of a cons cell) of TREE for which (TEST EL)
+returns non-nil, substitute (non-destructively) the value of (REPLACE EL).
+
+Only cons cells are followed. Replacements aren't followed.
+
+See also `cl-subst'.
+"
+  (let ((p (funcall test tree)))
+    (if p
+        (funcall replace tree)
+      (cond ((consp tree)
+             (let ((a (omake-subst test replace (car tree)))
+                   (d (omake-subst test replace (cdr tree))))
+               (if (and (eq a (car tree)) (eq d (cdr tree)))
+                   tree
+                 (cons a d))))
+            (t tree)))))
+
+;; Building regular expressions out of simpler ones can be painful.
+;; Also, Emacs's backslash quoting in strings makes regexps hard to read.
+;; We use the `rx' package to make readable regexps.
+
+(defun omake--re-ref-p (sym)
+  "Returns non-nil if SYM is a symbol starting with a !."
+  (and (symbolp sym)
+       (string-prefix-p "!" (symbol-name sym))))
+
+(defun omake--expand-re-ref (sym)
+  "For symbols SYM matching `omake--re-ref-p', return the associated value.
+The value of `omake--re-<sym>' is returned for symbols `!<sym>'; everything
+else is returned as-is."
+  (if (omake--re-ref-p sym)
+      (let ((new-sym (intern-soft
+                      (concat "omake--re-" (substring (symbol-name sym) 1)))))
+        (if new-sym
+            (symbol-value new-sym)
+          sym))
+    sym))
+
+(defun omake--rx (regexp)
+  "Substitute !-prefixed symbols in the `rx' regular expression REGEXP."
+  (let ((re (omake-subst #'omake--re-ref-p
+                         (lambda (x)
+                           (list 'regexp (omake--expand-re-ref x)))
+                         regexp)))
+    (rx-to-string
+     (if (and (consp re) (equal (car re) 'seq))
+         re
+       (cons 'seq re)))))
+
+(defun omake--replace-regexp-value (tree)
+  (omake-subst #'omake--re-ref-p #'omake--expand-re-ref
+               (omake-subst (lambda (x) (and (consp x) (equal (car x) 'rx)))
+                            (lambda (x) (omake--rx (cdr x)))
+                            tree)))
+
+
+(defvar omake-targets 'omake-targets
+  "Face to use for highlighting targets.")
+
+(defconst omake--re-special (rx (any "$(),.=:\"'`\\#?~\n")))
+(defconst omake--re-not-special (rx (not (any "$(),.=:\"'`\\#?~\n"))))
 (defconst omake--re-identifier "[_@A-Za-z0-9][-_@~A-Za-z0-9]*")
+(defconst omake--re-single-char-identifier "[][@~_A-Za-z0-9&*<^?-]")
+(defconst omake--re-pathid
+  (omake--rx '(seq (group (* !identifier "."))
+                   (group !identifier))))
+
+(defconst omake--statements
+  '("case"     "catch"  "class"   "declare"  "default"
+    "do"       "else"   "elseif"  "export"   "extends"
+    "finally"  "if"     "import"  "include"  "match"
+    "open"     "raise"  "return"  "section"  "switch"
+    "try"      "value"  "when"    "while")
+  "List of keywords that begin statements")
 
 (defconst omake--re-command
-  (rx (seq line-start
-           (* space)
-           (group
-            (or
-             "case"     "catch"  "class"   "declare"  "default"
-             "do"       "else"   "elseif"  "export"   "extends"
-             "finally"  "if"     "import"  "include"  "match"
-             "open"     "raise"  "return"  "section"  "switch"
-             "try"      "value"  "when"    "while"))
-           word-end)))
-
-(defconst omake--re-block-opening-command
-  (rx (group
-       (or
-        "if" "else" "elseif" "case" "when" "default" "try" "catch" "finally"
-        "section" "while"))))
-(defconst omake--re-block-closing-command
-  (rx (group (or "return" "raise" "value"))))
-
-(defconst omake--re-single-char-identifier "[][@~_A-Za-z0-9&*<^?-]")
-
-(defconst omake--re-variable-ref
-  (rx-to-string
-   `(seq
-     "$" (or (seq "(" (regexp ,omake--re-identifier) ")")
-             (regexp ,omake--re-single-char-identifier)))))
-
-(defconst omake--re-variable-def
   (rx-to-string
    `(seq line-start
          (* space)
-         (group
-          (regexp ,omake--re-identifier)
-          (group (* "." (regexp ,omake--re-identifier)))) ; for object members
+         (group (or ,@omake--statements))
+         symbol-end)))
+
+(defconst omake--re-block-opening-command
+  (rx (or "if" "else" "elseif" "case" "when" "default" "try" "catch" "finally"
+          "section" "while")))
+(defconst omake--re-block-closing-command
+  (rx (or "return" "raise" "value")))
+
+(defconst omake--qualifiers
+  '(;; Namespace qualifiers
+    "private" "this" "global" "protected" "public"
+    ;; Others
+    "curry" "static")
+  "List of keywords that are used as qualifiers in variable definitions")
+
+(defconst omake--re-qualifier
+  (regexp-opt omake--qualifiers 'words))
+
+(defconst omake--dot-targets
+  '(".BUILD_BEGIN" ".BUILD_FAILURE" ".BUILD_SUCCESS"
+    ".BUILDORDER"  ".DEFAULT"       ".INCLUDE"
+    ".MEMO"        ".ORDER"         ".PHONY"
+    ".SCANNER"     ".STATIC"        ".SUBDIRS"))
+(defconst omake--re-dot-targets
+  (regexp-opt omake--dot-targets))
+
+(defconst omake--re-variable-ref
+  ;; group 1: $` or $,
+  ;; group 2: path of pathid
+  ;; group 3: id of pathid
+  ;; group 4: single-char id
+  (omake--rx
+   '(seq (or "$" (group (or "$`" "$,")))
+         (or (seq "(" !pathid ")")
+             (group !single-char-identifier)))))
+
+(defconst omake--re-dollar-function-call
+  ;; group 1: $` or $,
+  ;; group 2: path of pathid
+  ;; group 3: id of pathid
+  (omake--rx
+   '(seq (or "$" (group (or "$`" "$,")))
+         "(" !identifier
+         space)))
+
+(defconst omake--re-variable-def
+  (omake--rx
+   '(seq line-start
+         (* space)
+         (group !identifier
+                (group (* "." !identifier))) ; for object members
          (group (\? "[]"))
          (* space)
          (group (\? "+"))
          "=")))
 
 (defconst omake--re-object-def
-  (rx-to-string
-   `(seq line-start
+  (omake--rx
+   '(seq line-start
          (* space)
-         (group (regexp ,omake--re-identifier))
+         (group !identifier)
          "."
          (* space)
          (group (\? "+"))
          "=")))
 
 (defconst omake--re-multiline-function-def
-  (rx-to-string
-   `(seq line-start
+  (omake--rx
+   '(seq line-start
          (* space)
-         (group (regexp ,omake--re-identifier)
-                (\? "." (regexp ,omake--re-identifier)))
+         (group !identifier (opt "." !identifier))
          (* space) "("
          ;; this should match id, ..., id, but we'll be sloppy
          (group (minimal-match (* nonl)))
@@ -204,23 +315,144 @@ anonymous function argument.")
            (group (or line-start "#"))))
   "Regular expression matching a blank or comment line.")
 
-(defconst omake-font-lock-keywords
-  (list
-   (cons omake--re-command font-lock-keyword-face)
-   (cons (rx (group
-              "$"
-              (group (or (+ ?\") (+ ?\')))
-              (minimal-match (* not-newline))
-              (backref 2)))
-         font-lock-string-face)
-   (cons (rx-to-string `(group (regexp, omake--re-variable-ref)))
-         font-lock-variable-name-face)
-   (cons (rx-to-string `(seq word-start
-                             (group (seq (regexp ,omake--re-identifier) "."))))
-         font-lock-type-face)
-   (cons (rx (group (seq "$" (in "*>@^+<&`,"))))
-         font-lock-builtin-face)
+(defconst omake--string-syntax (string-to-syntax "|")) ; generic string
+
+(defun omake--syntax-ppss (&optional pos)
+  (unless pos (setq pos (point)))
+  (save-excursion (syntax-ppss pos)))
+
+(defun omake--in-comment-or-string-p (&optional pos)
+  (let ((ppss (omake--syntax-ppss pos)))
+    (or (nth 3 ppss) (nth 4 ppss))))
+(defun omake--in-string-p (&optional pos)
+  (nth 3 (omake--syntax-ppss pos)))
+
+(defun omake--string-type (&optional pos)
+  (let ((ppss (omake--syntax-ppss (or pos (point)))))
+    (and (nth 3 ppss)
+         (let ((quotes (get-text-property (nth 8 ppss) 'omake-string-quotes)))
+           (if quotes
+               (elt quotes 0)
+             (lwarn '(omake) :warning
+                    "OMake: found string @ %d, but no 'omake-string-quotes text property" (nth 8 ppss))
+             nil)))))
+
+(defun omake--matching-quotes-re (quotes)
+  (let ((q-char (substring quotes 0 1)))
+    (concat "\\(?:^\\|[^" q-char "]\\)\\("
+            (regexp-quote quotes)
+            "\\)\\(?:[^" q-char "]\\|$\\)")))
+
+(defun omake--syntax-propertize-string (end)
+  (let ((ppss (omake--syntax-ppss)))
+    ;; Are we in a (generic) string?
+    (when (eq t (nth 3 ppss))
+      (let ((quotes (get-text-property (nth 8 ppss) 'omake-string-quotes)))
+        (save-excursion
+          (goto-char (max (point) (+ 1 (nth 8 ppss) (length quotes))))
+          (when (re-search-forward (omake--matching-quotes-re quotes) end 'move)
+            (let ((eos (match-end 1)))
+              (put-text-property (1- eos) eos
+                                 'syntax-table omake--string-syntax))))))))
+
+(defun omake--font-lock-open-string (start quotes end)
+  (unless (omake--in-comment-or-string-p start)
+    (put-text-property start (1+ start) 'omake-string-quotes quotes)
+    (put-text-property start (1+ start) 'syntax-table omake--string-syntax)
+    (omake--syntax-propertize-string end))
+  nil)
+
+(eval-and-compile
+  (defconst omake--re-open-string
+    (rx (group "$") (group (or (+ ?\') (+ ?\"))))))
+
+(defun omake-syntax-propertize (start end)
+  (goto-char start)
+  ;; Handle case where the region starts within a string.
+  (omake--syntax-propertize-string end)
+  (funcall
+   (syntax-propertize-rules
+    ;; quoted comment character
+    ("[\\]#" (0 "_"))
+    ;; \ doesn't quote in strings. (It probably should, esp. in $".." strings)
+    ("[\\]" (0 (if (omake--in-string-p)
+                   '(2)
+                 '(9))))
+    (omake--re-open-string
+     (1 (ignore
+         (omake--font-lock-open-string
+          (match-beginning 1) (match-string-no-properties 2) end)))) )
+   start end))
+
+(defconst omake--font-lock-var-ref-re
+  (omake--rx
+   '(seq (or "$" (group-n 1 (or "$`" "$,")))
+         (or (seq "("
+                  (group-n 2 (* !identifier "."))
+                  (or (seq (group-n 3 !identifier) ")")
+                      (seq (group-n 4 !identifier) space)))
+             (group-n 3 !single-char-identifier)))))
+
+(defun omake--font-lock-var-ref (limit)
+  (and (re-search-forward omake--font-lock-var-ref-re limit t)
+       (or (not (omake--in-comment-or-string-p))
+           (equal ?\" (omake--string-type)))))
+
+(defvar omake-font-lock-keywords-var
+  ;; This is processed by omake-font-lock-keywords.
+  ;; (rx ...) forms get expanded with rx-to-string
+  ;; !<id> inside an rx form are replaced with `(regexp ,omake--re-<id>)
+  ;; before expansion.
+  ;; Otherwise, !<id> gets expanded to the value of omake--re-<id>.
+  '((!command . font-lock-keyword-face)
+
+    ;; Variable and function references. We use prepend so that
+    ;; references inside $"..." are highlighted too.
+    (omake--font-lock-var-ref
+     (1 font-lock-builtin-face prepend t)
+     (2 font-lock-type-face prepend t)
+     (3 font-lock-variable-name-face prepend t)
+     (4 font-lock-function-name-face prepend t))
+
+    ((rx line-start (* space) (group !qualifier) ".")
+     (1 font-lock-type-face))
+
+    ;; Object/variable assignments, function definitions
+    ((rx line-start (* space)
+         (opt !qualifier ".")
+         (or
+          (seq (group-n 1 (+ !identifier "."))
+               (* space) (opt "+"))
+          (seq (group-n 1 (* !identifier ".") !identifier)
+               (opt "[]") (* space) (opt "+"))
+          (seq (group-n 1 (* !identifier "."))
+               (group-n 2 !identifier)
+               (* space) "(" (* (not (any ")" ?\n))) ")" (opt space))
+          )
+          "=")
+     (1 font-lock-variable-name-face nil t)
+     (2 font-lock-function-name-face nil t))
+
+    ;; Targets
+    ((rx line-start (* space)
+         (or
+          (group !dot-targets)
+          (group (+ (not (any "$(),=:\"'`\\#?~\n")))))
+         (* space) ":")
+     (1 font-lock-preprocessor-face nil t)
+     (2 omake-targets nil t))
+
+    ;; Highlight ~ (used for keyword arguments to functions).
+    ;; Although, this face is by default empty.
+    ("~" . font-lock-negation-char-face)
 ))
+
+(defun omake-font-lock-keywords ()
+  (omake--replace-regexp-value omake-font-lock-keywords-var))
+
+
+
+;;; Indentation
 
 (defun omake--alist (&rest body)
   (let (alist)
@@ -384,7 +616,7 @@ anonymous function argument.")
         (looking-at omake--re-block-closing-command))
        (t nil)))))
 
-(defvar omake-syntax-table
+(defun omake-make-syntax-table ()
   (let ((st (make-syntax-table)))
     (modify-syntax-entry ?\( "()" st)
     (modify-syntax-entry ?\) ")(" st)
@@ -392,18 +624,32 @@ anonymous function argument.")
     (modify-syntax-entry ?\] ")[" st)
     (modify-syntax-entry ?\{ "(}" st)
     (modify-syntax-entry ?\} "){" st)
-    (modify-syntax-entry ?\' "'" st)
+    ;; '...' and "..." aren't quotes: $'...', $"...", $''..'', etc. are.
+    ;; So we handle string syntax using syntax-propertize-function
+    (modify-syntax-entry ?\' "." st)
     (modify-syntax-entry ?\" "." st)
     (modify-syntax-entry ?#  "<" st)
     (modify-syntax-entry ?\n ">" st)
+    ;; Also handle backslash as escape in syntax-propertize-function
+    (modify-syntax-entry ?\\ "." st)
     (modify-syntax-entry ?_  "_" st)
     (modify-syntax-entry ?@  "_" st)
     (modify-syntax-entry ?-  "_" st)
     (modify-syntax-entry ?~  "_" st)
     st))
 
+;;;###autoload
+(defvar omake-syntax-table nil
+  "Syntax table used in OMake-mode buffers")
+(or omake-syntax-table
+    (setq omake-syntax-table
+          (omake-make-syntax-table)))
+
 (defun omake--set-local (v arg)
   (set (make-local-variable v) arg))
+
+;;;###autoload (add-to-list 'auto-mode-alist '("OMake\\(?:file\\|root\\)$" . omake-mode))
+;;;###autoload (add-to-list 'auto-mode-alist '("\\.om$" . omake-mode))
 
 ;;;###autoload
 (define-derived-mode omake-mode
@@ -412,14 +658,16 @@ anonymous function argument.")
 \\{omake-mode-map}"
   :syntax-table omake-syntax-table
   :abbrev-table nil
-    (omake--set-local 'comment-start "#")
-    (omake--set-local 'comment-end "")
-    (omake--set-local 'comment-start-skip "#+\\s-*")
-    (omake--set-local 'font-lock-defaults '(omake-font-lock-keywords))
-    (omake--set-local 'indent-line-function #'omake-indent)
-    (message "Omake mode")
-    (message "indent-line-function = %s" indent-line-function)
-)
+  (omake--set-local 'comment-start "#")
+  (omake--set-local 'comment-end "")
+  (omake--set-local 'comment-start-skip "#+\\s-*")
+  (omake--set-local 'syntax-propertize-function #'omake-syntax-propertize)
+  (omake--set-local 'font-lock-defaults
+                    '(#'omake-font-lock-keywords
+                      nil nil
+                      ((?@ . "w") (?- . "w") (?_ . "w")) nil
+                      ))
+  (omake--set-local 'indent-line-function #'omake-indent))
 
 (define-key omake-mode-map "\C-j"      'newline-and-indent)
 ;; indentation level modifiers. Same keys python-mode uses
