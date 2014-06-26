@@ -653,7 +653,7 @@ anonymous function argument.")
 
 ;;;###autoload
 (define-derived-mode omake-mode
-  nil "OMakefile"
+  prog-mode "OMakefile"
   "A major mode for editing OMake files.
 \\{omake-mode-map}"
   :syntax-table omake-syntax-table
